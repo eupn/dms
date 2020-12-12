@@ -1,7 +1,7 @@
 use anyhow::Result;
+use bdk::bitcoin::util::bip32::ExtendedPubKey;
 use bdk::bitcoin::{self, util::bip32::ExtendedPrivKey};
 use bip39::Seed;
-use bdk::bitcoin::util::bip32::ExtendedPubKey;
 
 pub struct Keychain {
     seed: Seed,
@@ -9,9 +9,7 @@ pub struct Keychain {
 
 impl Keychain {
     pub fn new(seed: Seed) -> Self {
-        Keychain {
-            seed,
-        }
+        Keychain { seed }
     }
 
     pub fn private_key(&self, network: bitcoin::Network) -> Result<ExtendedPrivKey> {

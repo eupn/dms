@@ -1,28 +1,34 @@
 use anyhow::Result;
-use structopt::{StructOpt};
-use bdk::{ScriptType, descriptor::template::DescriptorTemplate, OfflineWallet, Wallet, TxBuilder, FeeRate};
-use bip39::{MnemonicType, Language, Seed};
-use bdk::miniscript::{Descriptor, DescriptorPublicKey};
-use std::str::FromStr;
-use bdk::descriptor::ExtendedDescriptor;
-use bdk::miniscript::policy::Concrete;
-use bdk::database::MemoryDatabase;
-use bdk::sled;
-use bdk::keys::{ToDescriptorKey, DescriptorSecretKey};
-use bdk::bitcoin::secp256k1::Secp256k1;
 use bdk::bitcoin::hashes::hex::ToHex;
-use bdk::miniscript::descriptor::{KeyMap, DescriptorXKey};
+use bdk::bitcoin::secp256k1::Secp256k1;
 use bdk::bitcoin::util::bip32::ExtendedPubKey;
-use bdk::blockchain::{AnyBlockchain, ConfigurableBlockchain, AnyBlockchainConfig, ElectrumBlockchainConfig, noop_progress, log_progress};
+use bdk::bitcoin::Address;
 use bdk::blockchain::esplora::EsploraBlockchainConfig;
-use std::process;
-use bdk::wallet::tx_builder::ChangeSpendPolicy;
+use bdk::blockchain::{
+    log_progress, noop_progress, AnyBlockchain, AnyBlockchainConfig, ConfigurableBlockchain,
+    ElectrumBlockchainConfig,
+};
+use bdk::database::MemoryDatabase;
+use bdk::descriptor::policy::SatisfiableItem;
+use bdk::descriptor::ExtendedDescriptor;
+use bdk::keys::{DescriptorSecretKey, ToDescriptorKey};
+use bdk::miniscript::descriptor::{DescriptorXKey, KeyMap};
+use bdk::miniscript::policy::Concrete;
+use bdk::miniscript::{Descriptor, DescriptorPublicKey};
+use bdk::sled;
+use bdk::wallet::tx_builder::{ChangeSpendPolicy, TxOrdering};
+use bdk::{
+    descriptor::template::DescriptorTemplate, FeeRate, OfflineWallet, ScriptType, TxBuilder, Wallet,
+};
+use bip39::{Language, MnemonicType, Seed};
 use std::collections::BTreeMap;
 use std::iter::FromIterator;
-use bdk::bitcoin::Address;
+use std::process;
+use std::str::FromStr;
+use structopt::StructOpt;
 
-mod keychain;
 mod descriptor;
+mod keychain;
 
 const NETWORK: bdk::bitcoin::Network = bdk::bitcoin::Network::Regtest;
 
@@ -71,7 +77,7 @@ enum DeadMansSwitch {
         /// A passphrase for redeem key (redeemer).
         #[structopt(long)]
         redeem_passphrase: String,
-    }
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -81,7 +87,7 @@ fn main() -> anyhow::Result<()> {
         DeadMansSwitch::Create {
             owner_passphrase,
             redeem_passphrase,
-            mnemonic
+            mnemonic,
         } => {
             let (_, keys_redeemer) = create_redeemer(&mnemonic, &redeem_passphrase)?;
             let (_, redeemer_xprv) = keys_redeemer.into_iter().nth(0).unwrap();
@@ -114,7 +120,10 @@ fn main() -> anyhow::Result<()> {
             let new_addr = wallet.get_new_address()?;
             let balance = wallet.get_balance()?;
             if balance == 0 {
-                println!("[!] Balance is empty. Please deposit some funds to this address: {}", new_addr);
+                println!(
+                    "[!] Balance is empty. Please deposit some funds to this address: {}",
+                    new_addr
+                );
                 process::exit(1);
             }
 
@@ -122,8 +131,14 @@ fn main() -> anyhow::Result<()> {
 
             // There should be a single UTXO which is our stash
             let utxos = wallet.list_unspent()?;
-            let old_addresses = utxos.into_iter()
-                .map(|utxo| (Address::from_script(&utxo.txout.script_pubkey, NETWORK), utxo.txout.value))
+            let old_addresses = utxos
+                .into_iter()
+                .map(|utxo| {
+                    (
+                        Address::from_script(&utxo.txout.script_pubkey, NETWORK),
+                        utxo.txout.value,
+                    )
+                })
                 .collect::<Vec<_>>();
 
             println!("[ Moving Funds ]");
@@ -143,13 +158,11 @@ fn main() -> anyhow::Result<()> {
                 .policy_path(policy_path, ScriptType::External);
             let (psbt, _) = wallet.create_tx(tx)?;
             let (psbt, finalized) = wallet.sign(psbt, None)?;
-            let (psbt, finalized) = wallet.finalize_psbt(psbt, None)?;
 
             if !finalized {
                 eprintln!("Unable to finalize transaction");
                 process::exit(1);
             } else {
-                dbg!(&psbt);
                 println!("[!] Broadcasting transaction...");
 
                 let tx = psbt.extract_tx();
@@ -157,7 +170,7 @@ fn main() -> anyhow::Result<()> {
 
                 println!("[!] Txid: {}", txid);
             }
-        },
+        }
 
         _ => unimplemented!(),
     }
@@ -181,11 +194,16 @@ fn create_redeemer(mnemonic: &Option<String>, passphrase: &str) -> Result<(Strin
         println!("[redeemer] Generated mnemonic seed: {}", phrase);
     }
 
-    let (desc, keymap, _) = bdk::descriptor::template::BIP84(xpriv, ScriptType::External).build()?;
+    let (desc, keymap, _) =
+        bdk::descriptor::template::BIP84(xpriv, ScriptType::External).build()?;
     Ok((desc.to_string_with_secret(&keymap), keymap))
 }
 
-fn create_stash(redeemer_xprv: DescriptorSecretKey, mnemonic: &Option<String>, passphrase: &str) -> Result<String> {
+fn create_stash(
+    redeemer_xprv: DescriptorSecretKey,
+    mnemonic: &Option<String>,
+    passphrase: &str,
+) -> Result<String> {
     let is_mnemonic_generated = mnemonic.is_none();
     let mnemonic = match mnemonic {
         Some(mnemonic) => bip39::Mnemonic::from_phrase(&mnemonic, Language::English)?,
@@ -204,7 +222,8 @@ fn create_stash(redeemer_xprv: DescriptorSecretKey, mnemonic: &Option<String>, p
     let (_, keymap, _) = bdk::descriptor::template::BIP84(xpriv, ScriptType::External).build()?;
     let (_, desc_xprv) = keymap.into_iter().nth(0).unwrap();
 
-    let (desc, keymap, _) = descriptor::MoveOrRedeemWithTimeLock::new(desc_xprv, redeemer_xprv).build()?;
+    let (desc, keymap, _) =
+        descriptor::MoveOrRedeemWithTimeLock::new(desc_xprv, redeemer_xprv).build()?;
     let desc_str = desc.to_string_with_secret(&keymap);
     Ok(desc_str)
 }

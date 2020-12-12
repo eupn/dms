@@ -1,6 +1,6 @@
-use bdk::keys::{ToDescriptorKey, KeyError};
+use bdk::keys::{KeyError, ToDescriptorKey};
+use bdk::miniscript::Segwitv0;
 use bdk::template::{DescriptorTemplate, DescriptorTemplateOut};
-use bdk::miniscript::{Segwitv0};
 
 pub struct MoveOrRedeemWithTimeLock<K: ToDescriptorKey<Segwitv0>> {
     move_key: K,
@@ -32,7 +32,8 @@ impl<K: ToDescriptorKey<Segwitv0>> DescriptorTemplate for MoveOrRedeemWithTimeLo
                     (older 1000),
                     (pk move_key)
             )
-        ).unwrap();
+        )
+        .unwrap();
 
         Ok(desc)
     }
