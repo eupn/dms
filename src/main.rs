@@ -147,10 +147,11 @@ fn main() -> anyhow::Result<()> {
             }
             println!("To:\t{}", new_addr);
 
-            // Create move TX
+            // Choose "check-in" policy that only requires an owner's signature
             let policy_path = wallet.policies(ScriptType::External)?.unwrap();
             let policy_path = BTreeMap::from_iter(vec![(policy_path.id, vec![1])]);
 
+            // Create move TX
             let tx = TxBuilder::new()
                 .drain_wallet()
                 .set_single_recipient(new_addr.script_pubkey())
