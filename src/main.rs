@@ -11,14 +11,14 @@ use bdk::blockchain::{
 use bdk::database::MemoryDatabase;
 use bdk::descriptor::policy::SatisfiableItem;
 use bdk::descriptor::ExtendedDescriptor;
-use bdk::keys::{DescriptorSecretKey, ToDescriptorKey};
+use bdk::keys::{DescriptorSecretKey, IntoDescriptorKey};
 use bdk::miniscript::descriptor::{DescriptorXKey, KeyMap};
 use bdk::miniscript::policy::Concrete;
 use bdk::miniscript::{Descriptor, DescriptorPublicKey};
-use bdk::sled;
+use bdk::{sled, SignOptions, KeychainKind};
 use bdk::wallet::tx_builder::{ChangeSpendPolicy, TxOrdering};
 use bdk::{
-    descriptor::template::DescriptorTemplate, FeeRate, OfflineWallet, ScriptType, TxBuilder, Wallet,
+    descriptor::template::DescriptorTemplate, FeeRate, TxBuilder, Wallet,
 };
 use bip39::{Language, MnemonicType, Seed};
 use std::collections::BTreeMap;
@@ -26,6 +26,7 @@ use std::iter::FromIterator;
 use std::process;
 use std::str::FromStr;
 use structopt::StructOpt;
+use bdk::wallet::AddressIndex::New;
 
 mod descriptor;
 mod keychain;
@@ -96,8 +97,8 @@ fn main() -> anyhow::Result<()> {
             println!("[stash] Save this descriptor: {}", stash_desc);
 
             let database = MemoryDatabase::new();
-            let wallet = OfflineWallet::new_offline(&stash_desc, None, NETWORK, database)?;
-            dbg!(wallet.get_new_address().unwrap());
+            let wallet = Wallet::new_offline(&stash_desc, None, NETWORK, database)?;
+            dbg!(wallet.get_address(New).expect("new addr"));
         }
 
         DeadMansSwitch::CheckIn {
@@ -111,13 +112,13 @@ fn main() -> anyhow::Result<()> {
                 url: electrum,
                 socks5: None,
                 retry: 10,
-                timeout: 100,
+                timeout: Some(100),
             });
             let client = AnyBlockchain::from_config(&config)?;
             let wallet = Wallet::new(&descriptor, None, NETWORK, database, client)?;
             wallet.sync(log_progress(), None)?;
 
-            let new_addr = wallet.get_new_address()?;
+            let new_addr = wallet.get_address(New)?;
             let balance = wallet.get_balance()?;
             if balance == 0 {
                 println!(
@@ -148,17 +149,20 @@ fn main() -> anyhow::Result<()> {
             println!("To:\t{}", new_addr);
 
             // Choose "check-in" policy that only requires an owner's signature
-            let policy_path = wallet.policies(ScriptType::External)?.unwrap();
+            let policy_path = wallet.policies(KeychainKind::External)?.unwrap();
             let policy_path = BTreeMap::from_iter(vec![(policy_path.id, vec![1])]);
 
             // Create move TX
-            let tx = TxBuilder::new()
-                .drain_wallet()
-                .set_single_recipient(new_addr.script_pubkey())
-                .fee_rate(FeeRate::from_sat_per_vb(5.0))
-                .policy_path(policy_path, ScriptType::External);
-            let (psbt, _) = wallet.create_tx(tx)?;
-            let (psbt, finalized) = wallet.sign(psbt, None)?;
+            let (mut psbt, _) = {
+                let mut builder = wallet.build_tx();
+                builder
+                    .drain_wallet()
+                    .set_single_recipient(new_addr.script_pubkey())
+                    .fee_rate(FeeRate::from_sat_per_vb(5.0))
+                    .policy_path(policy_path, KeychainKind::External);
+                builder.finish()?
+            };
+            let finalized = wallet.sign(&mut psbt, SignOptions::default())?;
 
             if !finalized {
                 eprintln!("Unable to finalize transaction");
@@ -167,9 +171,9 @@ fn main() -> anyhow::Result<()> {
                 println!("[!] Broadcasting transaction...");
 
                 let tx = psbt.extract_tx();
-                let txid = wallet.broadcast(tx)?;
+                //let txid = wallet.broadcast(tx)?;
 
-                println!("[!] Txid: {}", txid);
+                //println!("[!] Txid: {}", txid);
             }
         }
 
@@ -196,7 +200,7 @@ fn create_redeemer(mnemonic: &Option<String>, passphrase: &str) -> Result<(Strin
     }
 
     let (desc, keymap, _) =
-        bdk::descriptor::template::BIP84(xpriv, ScriptType::External).build()?;
+        bdk::descriptor::template::Bip84(xpriv, KeychainKind::External).build()?;
     Ok((desc.to_string_with_secret(&keymap), keymap))
 }
 
@@ -220,7 +224,7 @@ fn create_stash(
         println!("[redeemer] Generated mnemonic seed: {}", phrase);
     }
 
-    let (_, keymap, _) = bdk::descriptor::template::BIP84(xpriv, ScriptType::External).build()?;
+    let (_, keymap, _) = bdk::descriptor::template::Bip84(xpriv, KeychainKind::External).build()?;
     let (_, desc_xprv) = keymap.into_iter().nth(0).unwrap();
 
     let (desc, keymap, _) =

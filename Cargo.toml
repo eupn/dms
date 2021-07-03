@@ -7,6 +7,5 @@ edition = "2018"
 [dependencies]
 structopt = "0.3"
 anyhow = "1"
-bdk = { git = "https://github.com/bitcoindevkit/bdk.git", features = ["compiler", "key-value-db", "esplora"] }
+bdk = { version = "0.8.0", features = ["compiler", "key-value-db", "esplora"] }
 tiny-bip39 = "0.8.0"
-
